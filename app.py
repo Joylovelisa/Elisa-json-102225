@@ -664,7 +664,6 @@ def render_provider_keys():
     
     for idx, (provider, config) in enumerate(PROVIDERS.items()):
         with cols[idx]:
-            # FIX: Use dictionary-style access for session_state to avoid attribute errors.
             env_present = bool(st.session_state['keys'].get(provider))
             st.markdown(provider_badge(provider, env_present))
             
@@ -676,7 +675,6 @@ def render_provider_keys():
                     help=f"Enter your {provider.upper()} API key"
                 )
                 if key:
-                    # FIX: Use dictionary-style access to update the nested dictionary.
                     st.session_state['keys'][provider] = key
                     st.session_state.connected[provider] = True
                     st.toast(f"✅ {provider.upper()} connected!", icon="🔐")
@@ -777,9 +775,21 @@ def render_dataset_tab():
                 df_copy = st.session_state.dataset_df.copy()
                 
                 if transform == "Drop duplicate rows":
-                    df_copy = df_copy.drop_duplicates().reset_index(drop=True)
-                    st.success(f"Removed {len(df) - len(df_copy)} duplicates")
-                
+                    # FIX: Handle unhashable types (like lists) before dropping duplicates.
+                    # This preserves original data types by identifying duplicates on a string-converted
+                    # version and then applying the filter to the original DataFrame.
+                    initial_rows = len(df_copy)
+                    
+                    df_hashable = df_copy.copy()
+                    for col in df_hashable.columns:
+                        if df_hashable[col].apply(type).eq(list).any():
+                            df_hashable[col] = df_hashable[col].astype(str)
+
+                    mask = ~df_hashable.duplicated()
+                    df_copy = df_copy[mask].reset_index(drop=True)
+                    
+                    st.success(f"Removed {initial_rows - len(df_copy)} duplicates")
+
                 elif transform == "Fill NaN with empty string":
                     df_copy = df_copy.fillna("")
                     st.success("Filled NaN values")
@@ -1043,7 +1053,6 @@ def render_run_tab():
                 model = agent["model"]
                 
                 # Check API key
-                # FIX: Use dictionary-style access for robustness.
                 api_key = st.session_state['keys'].get(provider)
                 if not api_key:
                     st.error(f"❌ {agent['name']}: Missing {provider.upper()} API key")
@@ -1245,8 +1254,23 @@ def render_insights_tab():
         st.metric("Columns", len(df.columns))
     with overview_cols[2]:
         st.metric("Empty Cells", int(df.isna().sum().sum()))
+    
     with overview_cols[3]:
-        st.metric("Duplicates", int(len(df) - len(df.drop_duplicates())))
+        # FIX: Handle unhashable types (like lists) before dropping duplicates
+        # by creating a temporary DataFrame with list columns converted to strings.
+        try:
+            df_hashable = df.copy()
+            for col in df_hashable.columns:
+                if df_hashable[col].apply(type).eq(list).any():
+                    df_hashable[col] = df_hashable[col].astype(str)
+            
+            duplicate_count = int(len(df) - len(df_hashable.drop_duplicates()))
+        except TypeError:
+            # Fallback if another unhashable type is encountered
+            duplicate_count = "N/A"
+        
+        st.metric("Duplicates", duplicate_count)
+
     with overview_cols[4]:
         memory_mb = df.memory_usage(deep=True).sum() / 1024 / 1024
         st.metric("Memory", f"{memory_mb:.2f} MB")
